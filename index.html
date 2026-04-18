@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>手機接金幣遊戲 - 動作音效版</title>
+    <style>
+        * { box-sizing: border-box; touch-action: none; user-select: none; }
+        body { margin: 0; padding: 0; background: #111; font-family: 'Arial', sans-serif; overflow: hidden; }
+        
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        canvas {
+            background: linear-gradient(to bottom, #0f2027, #203a43, #2c5364);
+            width: 100%;
+            height: 70%;
+            display: block;
+        }
+
+        #ui {
+            position: absolute;
+            top: 15px; left: 15px; right: 15px;
+            display: flex; justify-content: space-between;
+            color: white; font-size: 20px; font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #controls {
+            width: 100%;
+            height: 30%;
+            background: #222;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            border-top: 4px solid #333;
+        }
+
+        .btn {
+            width: 42%;
+            height: 75%;
+            background: #444;
+            border: 3px solid #666;
+            border-radius: 25px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 50px;
+            box-shadow: 0 5px 0 #000;
+        }
+
+        .btn:active { background: #666; box-shadow: 0 2px 0 #000; transform: translateY(3px); }
+
+        .overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 100;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .action-btn {
+            margin-top: 25px;
+            padding: 15px 50px;
+            background: #f1c40f;
+            border: none;
+            border-radius: 50px;
+            font-size: 22px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .instruction { color: #ccc; margin-top: 15px; font-size: 16px; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="title-screen" class="overlay">
+        <h1 style="font-size: 42px; color: #f1c40f; margin-bottom: 10px;">COIN CATCH</h1>
+        <p class="instruction">左右移動接住金幣！</p>
+        <button id="start-btn" class="action-btn">開始挑戰</button>
+    </div>
+
+    <div id="ui">
+        <div>SCORE: <span id="score">0</span></div>
+        <div>LIVES: <span id="lives">3</span></div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="controls">
+        <div class="btn" id="left-btn">◀</div>
+        <div class="btn" id="right-btn">▶</div>
+    </div>
+
+    <div id="game-over" class="overlay" style="display: none;">
+        <h1 style="font-size: 40px; color: #e74c3c;">GAME OVER</h1>
+        <p style="font-size: 20px;">最終分數: <span id="final-score">0</span></p>
+        <button id="restart-btn" class="action-btn">再試一次</button>
+    </div>
+</div>
+
+<!-- 僅保留動作音效資源 -->
+<audio id="sfx-collect" src="collect.mp3"></audio>
+<audio id="sfx-lose" src="lose.mp3"></audio>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // 獲取音效元素
+    const sfxCollect = document.getElementById('sfx-collect');
+    const sfxLose = document.getElementById('sfx-lose');
+    
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight * 0.7;
+
+    let score = 0;
+    let lives = 3;
+    let isGameRunning = false;
+    let coinSpeed = 4;
+    let frameCount = 0;
+    const spawnInterval = 85; 
+    const baseRange = 80;
+
+    const player = {
+        initialWidth: 110,
+        minWidth: 40,
+        width: 110,
+        height: 15,
+        x: canvas.width / 2 - 55,
+        y: canvas.height - 30,
+        color: '#00d2ff',
+        speed: 10
+    };
+
+    let coins = [];
+    let moveLeft = false;
+    let moveRight = false;
+
+    // 播放音效的輔助函數
+    function playSFX(audio) {
+        audio.currentTime = 0;
+        audio.play().catch(e => {}); 
+    }
+
+    function bindInput(id, callback) {
+        const btn = document.getElementById(id);
+        const start = (e) => { e.preventDefault(); callback(true); };
+        const end = (e) => { e.preventDefault(); callback(false); };
+        btn.addEventListener('touchstart', start, {passive: false});
+        btn.addEventListener('touchend', end, {passive: false});
+        btn.addEventListener('mousedown', start);
+        btn.addEventListener('mouseup', end);
+    }
+
+    bindInput('left-btn', (val) => moveLeft = val);
+    bindInput('right-btn', (val) => moveRight = val);
+
+    function createCoin() {
+        frameCount++;
+        if (frameCount >= spawnInterval) {
+            let currentRange = Math.min(canvas.width, baseRange + (score * 1.5));
+            let centerX = player.x + (player.width / 2);
+            let minX = Math.max(30, centerX - (currentRange / 2));
+            let maxX = Math.min(canvas.width - 30, centerX + (currentRange / 2));
+            let spawnX = Math.random() * (maxX - minX) + minX;
+            coins.push({ x: spawnX, y: -30, radius: 15, color: '#f1c40f' });
+            frameCount = 0;
+        }
+    }
+
+    function update() {
+        if (!isGameRunning) return;
+
+        if (moveLeft) player.x -= player.speed;
+        if (moveRight) player.x += player.speed;
+        player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
+
+        createCoin();
+
+        for (let i = coins.length - 1; i >= 0; i--) {
+            let c = coins[i];
+            c.y += coinSpeed;
+
+            if (c.y + c.radius > player.y && c.x > player.x && c.x < player.x + player.width) {
+                coins.splice(i, 1);
+                score += 10;
+                document.getElementById('score').innerText = score;
+                
+                playSFX(sfxCollect); // 🔊 收集音效
+
+                if (score > 0 && score % 100 === 0) {
+                    coinSpeed += 0.5;
+                    if (player.width > player.minWidth) {
+                        let shrink = 15;
+                        player.width -= shrink;
+                        player.x += shrink / 2;
+                    }
+                }
+                continue;
+            }
+
+            if (c.y - c.radius > canvas.height) {
+                coins.splice(i, 1);
+                lives--;
+                document.getElementById('lives').innerText = lives;
+                
+                playSFX(sfxLose); // 🔊 漏接音效
+
+                if (lives <= 0) endGame();
+            }
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = player.color;
+        ctx.fillStyle = player.color;
+        ctx.fillRect(player.x, player.y, player.width, player.height);
+
+        coins.forEach(c => {
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = "yellow";
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
+            ctx.fillStyle = c.color;
+            ctx.fill();
+        });
+        ctx.shadowBlur = 0;
+    }
+
+    function endGame() {
+        isGameRunning = false;
+        document.getElementById('final-score').innerText = score;
+        document.getElementById('game-over').style.display = 'flex';
+    }
+
+    function startGame() {
+        score = 0;
+        lives = 3;
+        coins = [];
+        coinSpeed = 4;
+        frameCount = 0;
+        player.width = player.initialWidth;
+        player.x = canvas.width / 2 - player.width / 2;
+        
+        isGameRunning = true;
+        document.getElementById('score').innerText = "0";
+        document.getElementById('lives').innerText = "3";
+        document.getElementById('title-screen').style.display = 'none';
+        document.getElementById('game-over').style.display = 'none';
+        requestAnimationFrame(gameLoop);
+    }
+
+    document.getElementById('start-btn').addEventListener('click', startGame);
+    document.getElementById('restart-btn').addEventListener('click', startGame);
+
+    function gameLoop() {
+        update();
+        draw();
+        if (isGameRunning) requestAnimationFrame(gameLoop);
+    }
+</script>
+</body>
+</html>
